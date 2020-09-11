@@ -1,5 +1,7 @@
 # Rent Price Scraper
 A quick tool for monitoring rent prices of my apartment complex to help gauge price fluxuations.
+You can see this data being visualized in [this Tableau dashboard](https://public.tableau.com/profile/viktoras.truchanovicius#!/vizhome/Prometheus/PrometheusPropertyAvailabilityandPrices?publish=yes)
+
 
 ## Setup
 1. Create python venv ```python -m venv```
