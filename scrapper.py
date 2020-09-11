@@ -7,6 +7,9 @@ import smtplib
 import time
 import click
 
+from contextlib import contextmanager
+from functools import wraps
+from multiprocessing import Pool 
 from email.message import EmailMessage
 
 from selenium import webdriver
@@ -18,7 +21,28 @@ from selenium.webdriver.common.by import By
 from apscheduler.schedulers.background import BlockingScheduler
 from oauth2client.service_account import ServiceAccountCredentials
 
-DOC_KEY = '1XZocxmyQ91e1exBvwDAaSR8Rhavy9WPnwLSz0Z5SKsM'
+
+@contextmanager
+def get_driver(*args, **kwargs):
+    options = Options()
+    options.headless = True
+    options.add_argument("--window-size=1920,1200")
+
+    DRIVER_PATH = './chromedriver'
+    driver = webdriver.Chrome(options=options, executable_path=DRIVER_PATH)
+    yield driver
+    driver.close()
+    driver.quit()
+
+
+def get_browser(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        with get_driver() as d:
+            kwargs['driver'] = d
+            return func(*args, **kwargs)
+    return wrapper
+
 
 @click.group()
 @click.option('--email', is_flag=True, help='A flag for sending email with results.')
@@ -73,24 +97,26 @@ def once(ctx):
 
 
 def run(email, username, email_to, password, gsheet, doc_key):
-    content = {}
-    content.update(get_prometheus_apartments('https://prometheusapartments.com/search/?term=San+Francisco+Bay+Area'))
-    content.update(get_prometheus_apartments('https://prometheusapartments.com/search/?term=Portland'))
-    content.update(get_prometheus_apartments('https://prometheusapartments.com/wa/gig-harbor-apartments/cliffside/'))
+    content = []
+    content += get_prometheus_apartments('https://prometheusapartments.com/search/?term=San+Francisco+Bay+Area')
+    content += get_prometheus_apartments('https://prometheusapartments.com/search/?term=Portland')
+    content += get_prometheus_apartments('https://prometheusapartments.com/search/?term=Seattle')
 
     formatted_content = format_email(content)
-    if email:
-        send_email(username, password, email_to, [content for content in formatted_content if  'mansion-grove' in content.keys()])
     
     if gsheet:
         update_historical_data(doc_key, content)
+        formatted_content += f'For historical data click the link below:\nhttps://docs.google.com/spreadsheets/d/1XZocxmyQ91e1exBvwDAaSR8Rhavy9WPnwLSz0Z5SKsM/edit?usp=sharing'
+    
+    if email:
+        send_email(username, password, email_to, formatted_content)
     print(formatted_content)
 
 
-def get_prometheus_apartments(url):
-    content = {}
-    driver = get_browser()
+@get_browser
+def get_prometheus_apartments(url, driver):
     driver.get(url)
+    content = []
     try:
         anchors = driver.find_elements_by_xpath("//div[@id='results-cards']/div/a[@class='card-wrapper']")
     except Exception as e:
@@ -102,55 +128,62 @@ def get_prometheus_apartments(url):
     for apt in links:
         name = apt.strip('/').split('/')[-1]
         apartments.append({'name': name, 'url': f'{apt}lease'})
-    for apt in apartments:
-        content[apt['name']] = get_availability(apt['url'])
+    
+    # Scrape each appartment in parallel
+    with Pool() as pool:
+        results = [pool.apply_async(get_availability, args=(apt,)) for apt in apartments]
+        for result in results:
+            data = result.get()
+            if data:
+                content.append(data)
     return content
 
 
 def update_historical_data(doc_key, content):
     date = datetime.datetime.today().strftime('%Y-%m-%d')
     all_content = []
-    for key, data in content.items():
+    for apt in content:
+        complex = apt['meta']['name']
+        data = apt['data']
         for row in data:
-            cleaned_values = [f'{date}', f'{key}'] + [value.replace('$', '').replace(',', '') for value in row]
+            cleaned_values = [f'{date}', f'{complex}'] + [value.replace('$', '').replace(',', '') for value in row]
             all_content.append(cleaned_values)
     update_gdoc(doc_key, all_content)
 
 
 def format_email(content):
     result = ''
-    for key, data in content.items():
-        result += f'------------ {key} ----------------\n'
+    for apt in content:
+        complex = apt['meta']['name']
+        data = apt['data']
+        if complex != 'mansion-grove':
+            continue
+        result += f'------------ {complex} ----------------\n'
         total_available = sum(int(row[-1]) for row in data)
         result += '\n'.join(', '.join(row) for row in data)
         result += f'\nTotal Available: {total_available}\n'
     
-    result += f'For historical data click the link below:\nhttps://docs.google.com/spreadsheets/d/1XZocxmyQ91e1exBvwDAaSR8Rhavy9WPnwLSz0Z5SKsM/edit?usp=sharing'
     return result
 
 
-def get_browser():
-    options = Options()
-    options.headless = True
-    options.add_argument("--window-size=1920,1200")
 
-    DRIVER_PATH = './chromedriver'
-    return webdriver.Chrome(options=options, executable_path=DRIVER_PATH)
-
- 
-def get_availability(url):
-    driver = get_browser()
+@get_browser 
+def get_availability(data, driver):
+    """
+    Returns apartment availability information 
+    """
+    url = data['url']
     driver.get(url)
     content = []
     print(f'Processing {url}')
-    delay = 30 # seconds
+    delay = 60 # seconds
     try:
         WebDriverWait(driver, delay).until(EC.frame_to_be_available_and_switch_to_it('rp-leasing-widget'))
         WebDriverWait(driver, delay).until(EC.presence_of_element_located((By.XPATH, "//button[contains(@class, 'primary')][contains(text(), 'Start')]")))
     except TimeoutException:
-        print('Waiting for iframe')
+        print(f'Page did not load: {url}')
+        return content
 
-    # import pdb; pdb.set_trace()
     try:
         driver.find_element_by_xpath("//button[contains(@class, 'primary')][contains(text(), 'Start')]").click()
         WebDriverWait(driver, delay).until(EC.presence_of_element_located((By.XPATH, "//a[contains(@class, 'ng-binding')]")))
@@ -174,11 +207,13 @@ def get_availability(url):
             units = int(match.groups()[0])
         min_price = prices[i].text.split(' - ')[0] if prices[i].text.strip()  else '0'
         content.append((names[i].text, specs[i].text, min_price, str(units)))
-    driver.quit()
-    return content
+    return {'meta': data, 'data': content}
 
 
 def send_email(username, password, to, content):
+    if not content:
+        print('Nothing to send')
+        return
     msg = EmailMessage()
     msg.set_content(content)
     msg['Subject'] = f'Apartment availability'
