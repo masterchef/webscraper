@@ -259,12 +259,12 @@ if __name__ == '__main__':
     cli()
 
 
-def main(mytimer: func.TimerRequest) -> None:
-    email = os.environ["sendEmail"]
-    email_to = os.environ["emailTo"]
-    username = os.environ["username"]
-    password = os.environ["password"]
-    gsheet = os.environ["updateGsheet"]
-    doc_key = os.environ["docKey"]
+def main(PrometheusScrapper: func.TimerRequest) -> None:
+    email = os.environ["SendEmail"]
+    email_to = os.environ["EmailTo"]
+    username = os.environ["GmailUsername"]
+    password = os.environ["GmailPassword"]
+    gsheet = os.environ["UpdateGSheet"]
+    doc_key = os.environ["GSheetKey"]
 
     run(email, username, email_to, password, gsheet, doc_key)
