@@ -2,15 +2,20 @@ import datetime
 import gspread
 import getpass
 import pandas as pd
+import os
 import re
 import smtplib
 import time
 import click
+import logging
+
+import azure.functions as func
 
 from contextlib import contextmanager
 from functools import wraps
 from multiprocessing import Pool 
 from email.message import EmailMessage
+
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -252,3 +257,14 @@ def update_gdoc(doc_key, cells):
 
 if __name__ == '__main__':
     cli()
+
+
+def main(mytimer: func.TimerRequest) -> None:
+    email = os.environ["sendEmail"]
+    email_to = os.environ["emailTo"]
+    username = os.environ["username"]
+    password = os.environ["password"]
+    gsheet = os.environ["updateGsheet"]
+    doc_key = os.environ["docKey"]
+
+    run(email, username, email_to, password, gsheet, doc_key)
