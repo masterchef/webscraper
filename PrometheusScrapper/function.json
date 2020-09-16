@@ -1,5 +1,6 @@
 {
   "scriptFile": "scrapper.py",
+  "entryPoint": "azurefunc",
   "bindings": [
     {
       "name": "PrometheusScrapper",

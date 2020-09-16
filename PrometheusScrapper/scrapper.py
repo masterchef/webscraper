@@ -33,7 +33,7 @@ def get_driver(*args, **kwargs):
     options.headless = True
     options.add_argument("--window-size=1920,1200")
 
-    DRIVER_PATH = './chromedriver'
+    DRIVER_PATH = 'PrometheusScrapper/chromedriver'
     driver = webdriver.Chrome(options=options, executable_path=DRIVER_PATH)
     yield driver
     driver.close()
@@ -59,13 +59,13 @@ def get_browser(func):
 def cli(ctx, email, email_to, username, gsheet, doc_key):
     ctx.ensure_object(dict)        
     if email and (not username or not email_to):
-        print('Please provide email sending parameters')
+        logging.error('Please provide email sending parameters')
         exit(0)
     elif email:
         password = getpass.getpass("Please enter your google account password for sending email:\n")
         ctx.obj['password'] = password
     if gsheet and not doc_key:
-        print('Please provide a gsheet doc key')
+        logging.error('Please provide a gsheet doc key')
         exit(0)
     pass
 
@@ -102,30 +102,33 @@ def once(ctx):
 
 
 def run(email, username, email_to, password, gsheet, doc_key):
+    logging.info('In run')
     content = []
     content += get_prometheus_apartments('https://prometheusapartments.com/search/?term=San+Francisco+Bay+Area')
     content += get_prometheus_apartments('https://prometheusapartments.com/search/?term=Portland')
     content += get_prometheus_apartments('https://prometheusapartments.com/search/?term=Seattle')
 
     formatted_content = format_email(content)
-    
     if gsheet:
+        logging.info('Updating gsheet')
         update_historical_data(doc_key, content)
         formatted_content += f'For historical data click the link below:\nhttps://docs.google.com/spreadsheets/d/1XZocxmyQ91e1exBvwDAaSR8Rhavy9WPnwLSz0Z5SKsM/edit?usp=sharing'
     
     if email:
+        logging.info('Sending email')
         send_email(username, password, email_to, formatted_content)
-    print(formatted_content)
+    logging.info(formatted_content)
 
 
 @get_browser
 def get_prometheus_apartments(url, driver):
     driver.get(url)
     content = []
+    logging.info(f'Getting apartments: {url}')
     try:
         anchors = driver.find_elements_by_xpath("//div[@id='results-cards']/div/a[@class='card-wrapper']")
     except Exception as e:
-        print(f'{e}')
+        logging.exception(f'{e}')
         return content
 
     links = [a.get_attribute('href') for a in anchors]
@@ -135,12 +138,17 @@ def get_prometheus_apartments(url, driver):
         apartments.append({'name': name, 'url': f'{apt}lease'})
     
     # Scrape each appartment in parallel
-    with Pool() as pool:
-        results = [pool.apply_async(get_availability, args=(apt,)) for apt in apartments]
-        for result in results:
-            data = result.get()
-            if data:
-                content.append(data)
+    for apt in apartments:
+        results = get_availability(apt)
+        if results:
+            content.append(results)
+
+    # with Pool() as pool:
+    #     results = [pool.apply_async(get_availability, args=(apt,)) for apt in apartments]
+    #     for result in results:
+    #         data = result.get()
+    #         if data:
+    #             content.append(data)
     return content
 
 
@@ -180,13 +188,13 @@ def get_availability(data, driver):
     url = data['url']
     driver.get(url)
     content = []
-    print(f'Processing {url}')
+    logging.info(f'Processing {url}')
     delay = 60 # seconds
     try:
         WebDriverWait(driver, delay).until(EC.frame_to_be_available_and_switch_to_it('rp-leasing-widget'))
         WebDriverWait(driver, delay).until(EC.presence_of_element_located((By.XPATH, "//button[contains(@class, 'primary')][contains(text(), 'Start')]")))
     except TimeoutException:
-        print(f'Page did not load: {url}')
+        logging.info(f'Page did not load: {url}')
         return content
 
     try:
@@ -200,9 +208,8 @@ def get_availability(data, driver):
         specs = driver.find_elements_by_xpath("//div[contains(@class, 'floorplan-tile')]/div/span[contains(@class, 'specs')]")
         prices = driver.find_elements_by_xpath("//div[contains(@class, 'floorplan-tile')]/div/span[contains(@class, 'range')]")
         availability = driver.find_elements_by_xpath("//div[contains(@class, 'floorplan-tile')]/div[@class='tile-buttons']/button")
-    except Exception as e:
-        print(f'{e}')
-        print(f'Unable to parse {url}')
+    except Exception:
+        logging.exception(f'Unable to parse {url}')
         return content
 
     for i in range(len(names)):
@@ -217,7 +224,7 @@ def get_availability(data, driver):
 
 def send_email(username, password, to, content):
     if not content:
-        print('Nothing to send')
+        logging.info('Nothing to send')
         return
     msg = EmailMessage()
     msg.set_content(content)
@@ -239,7 +246,7 @@ def update_gdoc(doc_key, cells):
     ]
 
     credentials = ServiceAccountCredentials.from_json_keyfile_name(
-        "credentials.json", scope,
+        "PrometheusScrapper/credentials.json", scope,
     )
 
     docs = gspread.authorize(credentials)
@@ -259,12 +266,11 @@ if __name__ == '__main__':
     cli()
 
 
-def main(PrometheusScrapper: func.TimerRequest) -> None:
+def azurefunc(PrometheusScrapper: func.TimerRequest) -> None:
     email = os.environ["SendEmail"]
     email_to = os.environ["EmailTo"]
     username = os.environ["GmailUsername"]
     password = os.environ["GmailPassword"]
     gsheet = os.environ["UpdateGSheet"]
     doc_key = os.environ["GSheetKey"]
-
     run(email, username, email_to, password, gsheet, doc_key)
