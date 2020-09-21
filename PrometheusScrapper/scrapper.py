@@ -2,6 +2,8 @@ import datetime
 import gspread
 import getpass
 import pandas as pd
+import pathlib
+import platform
 import os
 import re
 import smtplib
@@ -32,8 +34,16 @@ def get_driver(*args, **kwargs):
     options = Options()
     options.headless = True
     options.add_argument("--window-size=1920,1200")
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    if platform.system() == 'Linux':
+        DRIVER_PATH = 'chromedriver'
+    elif platform.system() == "Darwin":
+        DRIVER_PATH = (pathlib.Path(__file__).parent / 'chromedriver').resolve()
+    else:
+        logging.error('Unsupported OS')
+        exit(0)
 
-    DRIVER_PATH = 'PrometheusScrapper/chromedriver'
     driver = webdriver.Chrome(options=options, executable_path=DRIVER_PATH)
     yield driver
     driver.close()
@@ -245,8 +255,9 @@ def update_gdoc(doc_key, cells):
         "https://www.googleapis.com/auth/drive",
     ]
 
+    CREDENTIALS_PATH = pathlib.Path(__file__).parent / 'credentials.json'
     credentials = ServiceAccountCredentials.from_json_keyfile_name(
-        "PrometheusScrapper/credentials.json", scope,
+        CREDENTIALS_PATH.resolve(), scope,
     )
 
     docs = gspread.authorize(credentials)

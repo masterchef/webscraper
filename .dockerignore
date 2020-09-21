@@ -1,6 +1,2 @@
-.git*
-.vscode
 local.settings.json
-test
-.venv
 */chromedriver
